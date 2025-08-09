@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sample Means Game</title>
+<style>
+  :root { --bg:#0b0d10; --panel:#141820; --ink:#e9eef7; --muted:#9fb0c6;
+          --accent:#67b7ff; --accent-2:#9ad170; --accent-3:#ffb86b; --line:#2a3140; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--ink);
+       background:radial-gradient(1200px 600px at 20% -10%,#1c2330 0,var(--bg) 60%)}
+  header{padding:18px 20px 8px;border-bottom:1px solid var(--line)}
+  header h1{margin:0 0 6px;font-size:20px}
+  header p{margin:0;color:var(--muted);font-size:13px}
+
+  /* GRID: explicit areas so order is guaranteed regardless of DOM or width */
+  .wrap{
+    padding:14px;
+    display:grid;
+    gap:12px;
+    grid-template-columns:1fr 1fr;
+    grid-template-areas:
+      "controls stats"
+      "population sampling";
+  }
+  /* Map each panel to its area */
+  .panel.controls{grid-area:controls;}
+  .panel.stats{grid-area:stats;}
+  .panel.population{grid-area:population;}
+  .panel.sampling{grid-area:sampling;}
+
+  .panel{background:linear-gradient(180deg,#171c25,var(--panel));border:1px solid var(--line);
+         border-radius:10px;padding:12px;box-shadow:0 10px 20px rgb(0 0 0 / .25), inset 0 1px 0 rgb(255 255 255 / .02)}
+  .panel h2{margin:2px 0 8px;font-size:16px}
+  .boards{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  canvas{width:100%;height:300px;background:#0d121a;border-radius:8px;border:1px solid var(--line)}
+  .controls .controls-grid{display:grid;grid-template-columns:repeat(12,1fr);align-items:center;gap:10px}
+  .controls .controls-grid>*{min-width:0}
+  label{font-size:13px;color:var(--muted)}
+  select,input[type="range"],button,input[type="number"]{width:100%;background:#10151d;color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px}
+  input[type="range"]{padding:0;height:32px}
+  .btn-row{display:flex;gap:10px}
+  button{cursor:pointer;transition:transform .03s ease, background .2s ease}
+  button:active{transform:translateY(1px)}
+  .primary{background:#183044;border-color:#244a6a}
+  .good{background:#183a22;border-color:#2c5c33}
+  .warn{background:#3b2e15;border-color:#6b4f25}
+  .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .stat{background:#0f141c;border:1px solid var(--line);border-radius:8px;padding:8px}
+  .stat .k{color:var(--muted);font-size:12px}.stat .v{font-weight:600;font-size:16px;margin-top:2px}
+  .legend{color:var(--muted);font-size:12px;display:flex;gap:14px;align-items:center}
+  .chip{width:12px;height:12px;border-radius:3px;display:inline-block;margin-right:6px}
+  .chip.outline{background:transparent;border:2px dashed var(--muted)}
+  footer{padding:10px 14px 22px;color:var(--muted);font-size:12px}
+
+  /* Single column on narrow screens, keep the *visual* order TL→TR→BL→BR */
+  @media (max-width:900px){
+    .wrap{
+      grid-template-columns:1fr;
+      grid-template-areas:
+        "controls"
+        "stats"
+        "population"
+        "sampling";
+    }
+    canvas{height:260px}
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Sample Means Game</h1>
+    <p>Draw samples from a population. Watch the histogram of sample means converge and compare to the theoretical curve.</p>
+  </header>
+
+  <div class="wrap">
+    <!-- Controls (top-left, unchanged position) -->
+    <div class="panel controls">
+      <h2>Controls</h2>
+      <div class="controls-grid" id="controls">
+        <label style="grid-column: span 3;">Population
+          <select id="population">
+            <option value="normal">Normal (μ=0, σ=1)</option>
+            <option value="uniform">Uniform [-2, 2]</option>
+            <option value="lognormal">Skewed (Lognormal)</option>
+            <option value="bimodal">Bimodal (mixture)</option>
+          </select>
+        </label>
+
+        <label style="grid-column: span 3;">Sample size n
+          <input id="n" type="range" min="1" max="200" value="5" />
+        </label>
+
+        <label style="grid-column: span 2;">n value
+          <input id="nbox" type="number" min="1" max="200" value="5" />
+        </label>
+
+        <label style="grid-column: span 4;">Auto-draw speed (ms)
+          <input id="speed" type="range" min="50" max="1200" step="50" value="250" />
+        </label>
+
+        <div class="btn-row" style="grid-column: 1 / -1;">
+          <button id="draw1" class="primary">Draw Sample</button>
+          <button id="autoplay" class="good">Start Auto-draw</button>
+          <button id="reset" class="warn">Reset</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;" class="legend">
+        <span><span class="chip" style="background:var(--accent);"></span>Population curve / points</span>
+        <span><span class="chip" style="background:var(--accent-3);"></span>Sample points (last draw)</span>
+        <span><span class="chip" style="background:#fff;border:1px solid #1a1f2a;"></span>Sample means histogram</span>
+        <span><span class="chip outline" style="border-color:#9ad170;"></span>Theoretical normal (CLT)</span>
+        <span><span class="chip" style="background:#e66;"></span>Population mean</span>
+      </div>
+    </div>
+
+    <!-- Population (bottom-left) -->
+    <div class="panel population">
+      <h2>Population</h2>
+      <canvas id="pop" width="800" height="400"></canvas>
+      <p id="n1note" style="margin:.4rem 0 0;color:var(--muted);font-size:12px;display:none;">
+        n = 1 → sample mean equals the individual draw (mirrors population).
+      </p>
+    </div>
+
+    <!-- Sampling Distribution (bottom-right) -->
+    <div class="panel sampling">
+      <h2 style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Sampling Distribution (Sample Means)</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;">
+            <input id="overlayChk" type="checkbox" checked /> Overlay
+          </label>
+          <button id="zoomBtn" class="primary" style="padding:6px 10px;">Zoom In</button>
+        </span>
+      </h2>
+      <canvas id="hist" width="800" height="400"></canvas>
+    </div>
+
+    <!-- Progress / Stats (top-right) -->
+    <div class="panel stats">
+      <h2>Progress / Stats</h2>
+      <div class="stats-grid">
+        <div class="stat" id="muBoxWrap" style="display:none;">
+          <div class="k">Population mean (μ)</div>
+          <input id="muBox" type="number" step="any" value="0" />
+        </div>
+        <div class="stat" id="sigmaBoxWrap" style="display:none;">
+          <div class="k">Population SD (σ)</div>
+          <input id="sigmaBox" type="number" step="any" min="0.000001" value="1" />
+        </div>
+
+        <div class="stat"><div class="k"># of samples</div><div class="v" id="statCount">0</div></div>
+        <div class="stat"><div class="k">Mean of means</div><div class="v" id="statMean">–</div></div>
+        <div class="stat"><div class="k">SE of means</div><div class="v" id="statSE">–</div></div>
+        <div class="stat"><div class="k">Skewness (means)</div><div class="v" id="statSkew">–</div></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Tips: try a skewed, uniform or bimodal population, then adjust <em>n</em> (from 1 - 200). The sampling distribution moves toward normal and its spread approximates ~σ/√n (Central Limit Theorem).
+  </footer>
+
+<script>
+/* -------------------- Utility -------------------- */
+const rand = {
+  normal(mu=0, sigma=1) { let u=1-Math.random(), v=1-Math.random();
+    return mu + sigma*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); },
+  uniform(a=-2, b=2) { return a + (b-a)*Math.random(); },
+  lognormal(mu=0, sigma=0.6) { return Math.exp(rand.normal(mu, sigma)); },
+};
+function mix2(p, f1, f2) { return Math.random() < p ? f1() : f2(); }
+function mean(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function sd(arr){ const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/(arr.length-1)); }
+function skewness(arr){
+  const n = arr.length; if(n < 3) return NaN;
+  const m = mean(arr), s = sd(arr); if(!isFinite(s) || s===0) return 0;
+  const m3 = arr.reduce((t,x)=> t + Math.pow((x-m)/s,3), 0) / n;
+  return Math.sqrt(n*(n-1))/(n-2) * m3;
+}
+function clamp(x,a,b){ return Math.min(b, Math.max(a,x)); }
+function fmtVal(x){
+  const ax = Math.abs(x);
+  const dp = ax >= 1000 ? 0 : ax >= 100 ? 1 : 2;
+  return x.toFixed(dp).replace(/\.?0+$/,'');
+}
+
+/* -------------------- Populations -------------------- */
+const populations = {
+  normal:  { name:'Normal',
+             mu:0, sigma:1,
+             sample:()=>rand.normal(populations.normal.mu, populations.normal.sigma),
+             density:x=> 1/(populations.normal.sigma*Math.sqrt(2*Math.PI)) *
+                         Math.exp(-0.5 * ((x - populations.normal.mu)/populations.normal.sigma)**2),
+             xRange:[-4,4] },
+  uniform: { name:'Uniform', sample:()=>rand.uniform(-2,2),
+             density:x=>(x>=-2&&x<=2)?1/4:0, mu:0, sigma:Math.sqrt((2-(-2))**2/12), xRange:[-3,3] },
+  lognormal:{ name:'Lognormal', sample:()=>rand.lognormal(0,0.6)-1.4, density:null, mu:Math.exp(0.6*0.6/2)-1.4, sigma:null, xRange:[-2,6] },
+  bimodal: { name:'Bimodal', sample:()=>mix2(0.5,()=>rand.normal(-1,0.6),()=>rand.normal(1.2,0.6)), density:null, mu:0.1, sigma:null, xRange:[-4,4] }
+};
+
+/* -------------------- State -------------------- */
+let currentPopKey = 'normal';
+let n = 5;
+let means = [];
+let lastSample = [];
+let autoplayId = null;
+const speedSlider = { min:50, max:1200 };
+let speedMs = 250;
+let zoomed = false;
+let showOverlay = true;
+
+/* -------------------- DOM -------------------- */
+const dom = {
+  pop: document.getElementById('pop'),
+  hist: document.getElementById('hist'),
+  population: document.getElementById('population'),
+  n: document.getElementById('n'),
+  nbox: document.getElementById('nbox'),
+  speed: document.getElementById('speed'),
+  draw1: document.getElementById('draw1'),
+  autoplay: document.getElementById('autoplay'),
+  reset: document.getElementById('reset'),
+  statCount: document.getElementById('statCount'),
+  statMean: document.getElementById('statMean'),
+  statSE: document.getElementById('statSE'),
+  statSkew: document.getElementById('statSkew'),
+  muBoxWrap: document.getElementById('muBoxWrap'),
+  sigmaBoxWrap: document.getElementById('sigmaBoxWrap'),
+  muBox: document.getElementById('muBox'),
+  sigmaBox: document.getElementById('sigmaBox'),
+  zoomBtn: document.getElementById('zoomBtn'),
+  overlayChk: document.getElementById('overlayChk'),
+  n1note: document.getElementById('n1note')
+};
+
+/* -------------------- Drawing helpers -------------------- */
+function clear(ctx){ ctx.clearRect(0,0,ctx.canvas.width, ctx.canvas.height); }
+function axes(ctx, xMin, xMax, yMin, yMax){
+  return {
+    x:(x)=> (x - xMin)/(xMax-xMin) * (ctx.canvas.width-60) + 40,
+    y:(y)=> (1 - (y - yMin)/(yMax-yMin)) * (ctx.canvas.height-50) + 20
+  };
+}
+function drawLine(ctx, pts, {width=2, stroke='#67b7ff', dash=[]}={}){
+  ctx.save(); ctx.beginPath(); ctx.setLineDash(dash); ctx.lineWidth=width; ctx.strokeStyle=stroke;
+  pts.forEach(([x,y],i)=> i?ctx.lineTo(x,y):ctx.moveTo(x,y)); ctx.stroke(); ctx.restore();
+}
+function drawDots(ctx, pts, {radius=3, fill='#ffb86b', alpha=0.9}={}){
+  ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = fill;
+  for(const [x,y] of pts){ ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill(); }
+  ctx.restore();
+}
+function drawBars(ctx, bins, {fill='#9ad170', alpha=0.55, stroke='#2a3140'}={}){
+  ctx.save(); ctx.globalAlpha=alpha; ctx.fillStyle=fill; ctx.strokeStyle=stroke;
+  for(const b of bins){ ctx.fillRect(b.x, b.y, b.w, b.h); ctx.strokeRect(b.x, b.y, b.w, b.h); }
+  ctx.restore();
+}
+function drawText(ctx, txt, x, y, align='center', size=11, color='#9fb0c6'){
+  ctx.save(); ctx.fillStyle=color; ctx.font=`${size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`; ctx.textAlign=align; ctx.fillText(txt, x, y); ctx.restore();
+}
+
+/* -------------------- Rendering -------------------- */
+function renderPopulation(){
+  const ctx = dom.pop.getContext('2d'); clear(ctx);
+  const pop = populations[currentPopKey];
+
+  if(currentPopKey === 'normal'){
+    const mu = populations.normal.mu, s = Math.max(1e-6, populations.normal.sigma);
+    pop.xRange = [mu - 4*s, mu + 4*s];
+    pop.mu = mu; pop.sigma = s;
+  }
+
+  const [xmin,xmax] = pop.xRange;
+  const xs = [];
+  if(pop.density){ for(let i=0;i<=400;i++){ xs.push(xmin + (xmax-xmin)*i/400); } }
+  else {
+    const draws = 12000;
+    const arr = Array.from({length:draws}, pop.sample).sort((a,b)=>a-b);
+    for(let i=0;i<=400;i++){ xs.push(xmin + (xmax-xmin)*i/400); }
+    const bw = (xmax-xmin)/40;
+    pop._density_cache = xs.map(x => { let s=0, c=0; for(const v of arr){ const u=(x-v)/bw; s += Math.exp(-0.5*u*u); c++; }
+      return s/(c*bw*Math.sqrt(2*Math.PI)); });
+  }
+  const ys = pop.density ? xs.map(pop.density) : pop._density_cache;
+  const yMax = Math.max(...ys)*1.15;
+  const ax = axes(ctx, xmin, xmax, 0, yMax);
+
+  drawLine(ctx, [[ax.x(xmin), ax.y(0)], [ax.x(xmax), ax.y(0)]], {width:1, stroke:'#2a3140'});
+  const curve = xs.map((x,i)=>[ax.x(x), ax.y(ys[i])]);
+  drawLine(ctx, curve, {width:3, stroke:'#67b7ff'});
+
+  const dots = lastSample.map(x => [ax.x(x), ax.y(0)+Math.random()*8 - 4]);
+  drawDots(ctx, dots, {radius:4, fill:'#ffb86b'});
+
+  if(lastSample.length){
+    const xm = ax.x(mean(lastSample));
+    const yMaxPx = ax.y(yMax);
+    drawLine(ctx, [[xm, ax.y(0)], [xm, yMaxPx]], {width:2, stroke:'#ffffff'});
+  }
+
+  const mu = (pop.mu ?? 0);
+  const xmu = ax.x(mu);
+  drawLine(ctx, [[xmu, ax.y(0)], [xmu, ax.y(yMax)]], {width:2, dash:[6,6], stroke:'#e66'});
+
+  const sigmaPop = (pop.sigma ?? estimatePopSigma(pop));
+  const kTicks = [-3,-2,-1,0,1,2,3];
+  kTicks.forEach(k=>{
+    const x = mu + k*sigmaPop;
+    if(x < xmin || x > xmax) return;
+    const X = ax.x(x);
+    drawLine(ctx, [[X, ax.y(0)], [X, ax.y(0)+6]], {width:2, stroke:'#3a4254'});
+    drawText(ctx, fmtVal(x), X, ax.y(0)+22, 'center', 13, '#cfe3ff');
+  });
+  drawText(ctx, 'value', ax.x(xmax), ax.y(0)+36, 'right', 12, '#cfe3ff');
+}
+
+function renderHistogram(){
+  const ctx = dom.hist.getContext('2d'); clear(ctx);
+  const pop = populations[currentPopKey];
+  const mu = (pop.mu ?? 0);
+
+  const [xL, xR] = pop.xRange;
+  const center = mu, width = (xR - xL);
+  const zWidth = zoomed ? width/Math.sqrt(n) : width;
+  const xmin = center - zWidth/2, xmax = center + zWidth/2;
+
+  const sigmaPop = (pop.sigma ?? estimatePopSigma(pop));
+  const sigma = sigmaPop / Math.sqrt(n);
+  const binWidth = Math.max((xR - xL) / 2000, sigma / 3);
+  const binsCount = Math.max(3, Math.ceil((xmax - xmin) / binWidth));
+  const bins = Array.from({length:binsCount}, (_,i)=>{
+    const lo = xmin + i*binWidth;
+    const hi = Math.min(xmax, lo + binWidth);
+    return {lo, hi, c:0};
+  });
+  for(const m of means){
+    const idx = Math.floor((m - xmin) / binWidth);
+    const j = clamp(idx, 0, binsCount-1);
+    bins[j].c++;
+  }
+
+  const total = Math.max(1, means.length);
+  const rels = bins.map(b => b.c/total);
+  const ax = axes(ctx, xmin, xmax, 0, 1.0);
+  drawLine(ctx, [[ax.x(xmin), ax.y(0)], [ax.x(xmax), ax.y(0)]], {width:1, stroke:'#2a3140'});
+
+  const yTicks = [];
+  const step = 0.05;
+  for(let v=0; v<=1.0001; v+=step) yTicks.push(Math.round(v*100)/100);
+  yTicks.forEach(v=>{
+    const y=ax.y(v);
+    drawLine(ctx, [[ax.x(xmin), y],[ax.x(xmax), y]], {width:1, stroke:'#141a24', dash:[3,6]});
+    drawText(ctx, v.toFixed(2), 28, y+4, 'right');
+  });
+  drawText(ctx, 'Relative Frequency', 16, 18, 'left', 11);
+
+  const bars = bins.map((b,i) => {
+    const rf = Math.min(1, rels[i]);
+    const xLpx = ax.x(b.lo), xRpx = ax.x(b.hi);
+    const w = Math.max(1, xRpx - xLpx - 2);
+    const h = Math.max(0, ax.y(0) - ax.y(rf));
+    const y = ax.y(rf);
+    return {x:xLpx+1, y, w, h};
+  });
+  drawBars(ctx, bars, {fill:'#ffffff', alpha:0.9, stroke:'#1a1f2a'});
+
+  if(showOverlay){
+    const xs = []; for (let i=0;i<=400;i++){ xs.push(xmin + (xmax-xmin)*i/400); }
+    const densRF = xs.map(x => 1/(sigma*Math.sqrt(2*Math.PI)) * Math.exp(-0.5*((x-mu)/sigma)**2) * binWidth);
+    const curve = xs.map((x,i)=>[ax.x(x), ax.y(Math.min(1, densRF[i]))]);
+    drawLine(ctx, curve, {width:2, dash:[8,6], stroke:'#9ad170'});
+    const xmu = ax.x(mu);
+    drawLine(ctx, [[xmu, ax.y(0)], [xmu, 14]], {width:2, dash:[6,6], stroke:'#e66'});
+  }
+
+  const kTicks = [-3,-2,-1,0,1,2,3];
+  const pxPerSE = Math.abs(ax.x(mu + sigma) - ax.x(mu));
+  const crowded = pxPerSE < 40;
+  if(!crowded && showOverlay){
+    kTicks.forEach(k=>{
+      const x = mu + k*sigma;
+      if(x < xmin || x > xmax) return;
+      const X = ax.x(x);
+      drawLine(ctx, [[X, ax.y(0)], [X, ax.y(0)+6]], {width:2, stroke:'#3a4254'});
+      drawText(ctx, fmtVal(x), X, ax.y(0)+22, 'center', 13, '#cfe3ff');
+    });
+    drawText(ctx, 'value', ax.x(xmax), ax.y(0)+36, 'right', 12, '#cfe3ff');
+  } else if(showOverlay){
+    const X = ax.x(mu);
+    drawLine(ctx, [[X, ax.y(0)], [X, ax.y(0)+6]], {width:2, stroke:'#3a4254'});
+    drawText(ctx, fmtVal(mu), X, ax.y(0)+22, 'center', 13, '#cfe3ff');
+  }
+}
+
+/* -------------------- Simulation -------------------- */
+function estimatePopSigma(pop){
+  const arr = Array.from({length:12000}, pop.sample);
+  return sd(arr);
+}
+
+function drawOneSample(){
+  const pop = populations[currentPopKey];
+  lastSample = Array.from({length:n}, pop.sample);
+  const m = mean(lastSample);
+  means.push(m);
+  updateStats();
+  renderPopulation();
+  renderHistogram();
+}
+
+function updateStats(){
+  dom.statCount.textContent = means.length;
+  if(means.length>=1){
+    const m = mean(means);
+    const s = means.length>1 ? sd(means) : 0;
+    dom.statMean.textContent = m.toFixed(3);
+    dom.statSE.textContent = s.toFixed(3);
+    const sk = skewness(means);
+    dom.statSkew.textContent = isFinite(sk) ? sk.toFixed(3) : '–';
+  } else {
+    dom.statMean.textContent = dom.statSE.textContent = dom.statSkew.textContent = "–";
+  }
+}
+
+function reset(){
+  means.length = 0;
+  lastSample.length = 0;
+  updateStats();
+  renderPopulation();
+  renderHistogram();
+}
+
+/* -------------------- Autoplay -------------------- */
+function startAutoplay(){
+  if(autoplayId) return;
+  dom.autoplay.textContent = "Stop Auto-draw";
+  autoplayId = setInterval(drawOneSample, speedMs);
+}
+function stopAutoplay(){
+  if(!autoplayId) return;
+  clearInterval(autoplayId); autoplayId = null;
+  dom.autoplay.textContent = "Start Auto-draw";
+}
+
+/* -------------------- Events -------------------- */
+function showHideMuSigma(){
+  const onNormal = (currentPopKey === 'normal');
+  dom.muBoxWrap.style.display = onNormal ? '' : 'none';
+  dom.sigmaBoxWrap.style.display = onNormal ? '' : 'none';
+}
+dom.population.addEventListener('change', e=>{
+  currentPopKey = e.target.value;
+  showHideMuSigma();
+  stopAutoplay(); reset();
+});
+dom.n.addEventListener('input', e=>{ n=+e.target.value; dom.nbox.value=n; renderPopulation(); renderHistogram(); });
+dom.nbox.addEventListener('input', e=>{
+  n = clamp(+e.target.value || 1, 1, 200);
+  dom.n.value=n; renderPopulation(); renderHistogram();
+});
+dom.speed.addEventListener('input', e=>{
+  const v = +e.target.value;
+  speedMs = speedSlider.min + (speedSlider.max - v);
+  if(autoplayId){ stopAutoplay(); startAutoplay(); }
+});
+
+dom.muBox.addEventListener('change', ()=>{
+  const val = +dom.muBox.value;
+  if(!isFinite(val)) return;
+  populations.normal.mu = val;
+  populations.normal.xRange = [val - 4*Math.max(1e-6, populations.normal.sigma), val + 4*Math.max(1e-6, populations.normal.sigma)];
+  stopAutoplay(); reset();
+});
+dom.sigmaBox.addEventListener('change', ()=>{
+  let s = +dom.sigmaBox.value;
+  if(!isFinite(s) || s <= 0) s = 1e-6;
+  populations.normal.sigma = s;
+  const mu = populations.normal.mu;
+  populations.normal.xRange = [mu - 4*s, mu + 4*s];
+  stopAutoplay(); reset();
+});
+
+dom.overlayChk.addEventListener('change', e=>{ showOverlay = e.target.checked; renderHistogram(); });
+dom.zoomBtn.addEventListener('click', ()=>{
+  zoomed = !zoomed;
+  dom.zoomBtn.textContent = zoomed ? 'Zoom Out' : 'Zoom In';
+  renderHistogram();
+});
+
+dom.draw1.addEventListener('click', drawOneSample);
+dom.autoplay.addEventListener('click', ()=> autoplayId ? stopAutoplay() : startAutoplay());
+dom.reset.addEventListener('click', ()=>{ stopAutoplay(); reset(); });
+
+/* -------------------- Init -------------------- */
+speedMs = speedSlider.min + (speedSlider.max - +dom.speed.value);
+showHideMuSigma();
+dom.muBox.value = populations.normal.mu;
+dom.sigmaBox.value = populations.normal.sigma;
+populations.normal.xRange = [populations.normal.mu - 4*populations.normal.sigma, populations.normal.mu + 4*populations.normal.sigma];
+reset();
+</script>
+</body>
+</html>
